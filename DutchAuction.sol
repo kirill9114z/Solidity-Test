@@ -3,77 +3,52 @@
 pragma solidity ^0.8.0;
 
 contract DutchAuction {
-    address public owner;
-    uint constant DURATION = 2 days; // 2 * 24 * 60 * 60
-    uint constant FEE = 10; // 10%
-    // immutable
-    struct Auction {
-        address payable seller;
-        uint startingPrice;
-        uint finalPrice;
-        uint startAt;
-        uint endsAt;
-        uint discountRate;
-        string item;
-        bool stopped;
-        
+    uint private constant DURATION = 2 days;
+    address payable public immutable seller;
+    uint public immutable startingPrice;
+    uint public immutable startAt;
+    uint public immutable endsAt;
+    uint public immutable discountRate;
+    string public item;
+    bool public stopped;
+
+    event Bought(uint price, address buyer);
+
+    constructor(uint _startingPrice, uint _discountRate, string memory _item) {
+        require(_startingPrice >= _discountRate * DURATION, "price too low!");
+        seller = payable(msg.sender);
+        startingPrice = _startingPrice;
+        discountRate = _discountRate;
+        startAt = block.timestamp;
+        endsAt = block.timestamp + DURATION;
+        item = _item;
     }
 
-    Auction[] public auctions;
-
-    event AuctionCreated(uint index, string itemName, uint startingPrice, uint duration);
-    event AuctionEnded(uint index, uint finalPrice, address winner);
-
-    constructor() {
-        owner = msg.sender;
+    modifier notStopped {
+        require(!stopped, "has already stopped!");
+        _;
     }
 
-    function createAuction(uint _startingPrice, uint _discountRate, string memory _item, uint _duration) external {
-        uint duration = _duration == 0 ? DURATION : _duration;
-
-        require(_startingPrice >= _discountRate * duration, "incorrect starting price");
-
-        Auction memory newAuction = Auction({
-            seller: payable(msg.sender),
-            startingPrice: _startingPrice,
-            finalPrice: _startingPrice,
-            discountRate: _discountRate,
-            startAt: block.timestamp, // now
-            endsAt: block.timestamp + duration,
-            item: _item,
-            stopped: false
-        });
-
-        auctions.push(newAuction);
-
-        emit AuctionCreated(auctions.length - 1, _item, _startingPrice, duration);
+    function getPrice() public view notStopped returns(uint) {
+        uint timeElapsed = block.timestamp - startAt;        
+        uint discount = discountRate * timeElapsed;
+        return startingPrice - discount;
     }
 
-    function getPriceFor(uint index) public view returns(uint) {
-        Auction memory cAuction = auctions[index];
-        require(!cAuction.stopped, "stopped!");
-        uint elapsed = block.timestamp - cAuction.startAt;
-        uint discount = cAuction.discountRate * elapsed;
-        return cAuction.startingPrice - discount;
+    function nextBlock() external {
+
     }
 
-    function buy(uint index) external payable {
-        Auction storage cAuction = auctions[index];
-        require(!cAuction.stopped, "stopped!");
-        require(block.timestamp < cAuction.endsAt, "ended!");
-        uint cPrice = getPriceFor(index);
-        require(msg.value >= cPrice, "not enough funds!");
-        cAuction.stopped = true;
-        cAuction.finalPrice = cPrice;
-        uint refund = msg.value - cPrice;
-        if(refund > 0) {
+    function buy() external payable notStopped {
+        require(block.timestamp < endsAt, "too late!");
+        uint price = getPrice();
+        require(msg.value >= price, "too low!");
+        uint refund = msg.value - price;
+        if (refund > 0) {
             payable(msg.sender).transfer(refund);
         }
-        cAuction.seller.transfer(
-            cPrice - ((cPrice * FEE) / 100)
-        ); // 500
-        // 500 - ((500 * 10) / 100) = 500 - 50 = 450
-        // Math.floor --> JS
-        emit AuctionEnded(index, cPrice, msg.sender);
+        seller.transfer(address(this).balance);
+        stopped = true;
+        emit Bought(price, msg.sender);
     }
 }
